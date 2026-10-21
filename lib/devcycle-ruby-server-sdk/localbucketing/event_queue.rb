@@ -17,6 +17,7 @@ module DevCycle
       @event_flush_interval_ms = options.event_flush_interval_ms
       @flush_event_queue_size = options.flush_event_queue_size
       @max_event_queue_size = options.max_event_queue_size
+      @closed = false
       @flush_timer_task = Concurrent::TimerTask.new(
         execution_interval: @event_flush_interval_ms.fdiv(1000)
       ) {
@@ -29,14 +30,27 @@ module DevCycle
 
     end
 
-    def close
+    # Stops the flush timer. With flush: true (the default) pending events are
+    # sent once more before closing; events that fail to send are dropped.
+    # With flush: false pending events are dropped without being sent.
+    # Events queued after close are ignored.
+    def close(flush: true)
       @flush_timer_task.shutdown
-      flush_events
+      flush_events if flush
+      @flush_mutex.synchronize do
+        @closed = true
+      end
+      nil
+    end
+
+    def closed?
+      @closed
     end
 
     sig { returns(NilClass) }
     def flush_events
       @flush_mutex.synchronize do
+        return if @closed
         payloads = @local_bucketing.flush_event_queue
         if payloads.length == 0
           return
@@ -70,6 +84,7 @@ module DevCycle
     # Todo: implement PopulatedUser
     sig { params(user: User, event: Event).returns(NilClass) }
     def queue_event(user, event)
+      return if @closed
       if max_event_queue_size_reached?
         @logger.warn("Max event queue size reached, dropping event: #{event}")
         return
@@ -81,6 +96,7 @@ module DevCycle
 
     sig { params(event: Event, bucketed_config: T.nilable(BucketedUserConfig)).returns(NilClass) }
     def queue_aggregate_event(event, bucketed_config)
+      return if @closed
       if max_event_queue_size_reached?
         @logger.warn("Max event queue size reached, dropping event: #{event}")
         return

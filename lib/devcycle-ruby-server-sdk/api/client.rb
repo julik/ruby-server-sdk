@@ -15,6 +15,9 @@ module DevCycle
       @dvc_options = dvc_options
       @logger = dvc_options.logger
       @eval_hooks_runner = EvalHooksRunner.new
+      @owner_pid = Process.pid
+      @closed = false
+      @close_mutex = Mutex.new
 
       if @dvc_options.enable_cloud_bucketing
         @api_client = ApiClient.default
@@ -28,32 +31,65 @@ module DevCycle
       @open_feature_provider = Provider.new(self)
     end
 
+    # Shuts the client down. In local bucketing mode this waits for the initial
+    # config fetch to finish, stops config polling and the SSE connection,
+    # stops the event flush timer, sends pending events once (events that fail
+    # to send are dropped) and releases the client's WASM instance.
+    #
+    # When called in a process forked from the one that created the client,
+    # pending events are dropped rather than sent, because the parent process
+    # still holds and sends the same events.
+    #
+    # After close, evaluations return default values and track is ignored.
+    # Calling close more than once is safe.
     def close
+      @close_mutex.synchronize do
+        return nil if @closed
+        @closed = true
+      end
+
       if @dvc_options.enable_cloud_bucketing
         @logger.info("Cloud Bucketing does not require closing.")
         return
       end
-      if @local_bucketing != nil
-        if !@local_bucketing.initialized
+
+      if forked?
+        release_after_fork
+        return nil
+      end
+
+      local_bucketing = @local_bucketing
+      if local_bucketing != nil
+        if !local_bucketing.initialized
           @logger.info("Awaiting client initialization before closing")
-          while !@local_bucketing.initialized
-            sleep(0.5)
-          end
         end
-        @local_bucketing.close
+        local_bucketing.close
         @local_bucketing = nil
         @logger.info("Closed DevCycle Local Bucketing Engine.")
       end
 
       @event_queue.close
+      local_bucketing.release_wasm if local_bucketing != nil
       @logger.info("Closed DevCycle Client.")
       nil
+    end
+
+    # @return [Boolean] true once close has been called
+    def closed?
+      @closed
+    end
+
+    # @return [Boolean] true when the current process is not the one that
+    #   created this client, i.e. the client was inherited through fork
+    def forked?
+      Process.pid != @owner_pid
     end
 
     def set_client_custom_data(custom_data)
       if @dvc_options.enable_cloud_bucketing
         raise StandardError.new("Client Custom Data is only available in Local bucketing mode.")
       end
+      raise_if_forked
 
       if local_bucketing_initialized?
         @local_bucketing.set_client_custom_data(custom_data)
@@ -78,6 +114,7 @@ module DevCycle
       end
 
       validate_model(user)
+      raise_if_forked
 
       if @dvc_options.enable_cloud_bucketing
         data, _status_code, _headers = all_features_with_http_info(user, opts)
@@ -172,6 +209,7 @@ module DevCycle
       end
 
       validate_model(user)
+      raise_if_forked
 
       # Create hook context
       hook_context = HookContext.new(key: key, user: user, default_value: default)
@@ -358,6 +396,7 @@ module DevCycle
       end
 
       validate_model(user)
+      raise_if_forked
 
       if @dvc_options.enable_cloud_bucketing
         data, _status_code, _headers = all_variables_with_http_info(user, opts)
@@ -446,6 +485,7 @@ module DevCycle
       end
 
       validate_model(event_data)
+      raise_if_forked
 
       if @dvc_options.enable_cloud_bucketing
         track_with_http_info(user, event_data, opts)
@@ -527,6 +567,7 @@ module DevCycle
     end
 
     def flush_events
+      raise_if_forked
       @event_queue.flush_events
     end
 
@@ -614,6 +655,25 @@ module DevCycle
     # @return [void]
     def clear_eval_hooks
       @eval_hooks_runner.clear_hooks
+    end
+
+    private
+
+    def raise_if_forked
+      return if @dvc_options.enable_cloud_bucketing || @closed || !forked?
+
+      raise ForkedClientError, "This DevCycle::Client was created in process #{@owner_pid} and cannot be used " \
+        "in forked process #{Process.pid}. Create a new client after forking (for example in Puma's " \
+        "on_worker_boot or Unicorn's after_fork) and call close on the inherited one."
+    end
+
+    def release_after_fork
+      # Threads started by the parent do not exist in this process, so there
+      # is nothing to stop. Dropping the references lets this process's copy
+      # of the WASM instance be garbage collected.
+      @event_queue.close(flush: false) if @event_queue != nil
+      @local_bucketing = nil
+      @logger.info("Released DevCycle Client inherited from process #{@owner_pid} without sending its pending events.")
     end
   end
 
