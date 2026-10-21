@@ -6,6 +6,7 @@ require 'typhoeus'
 require 'json'
 require 'time'
 require 'ld-eventsource'
+require 'monitor'
 
 module DevCycle
   class ConfigManager
@@ -29,14 +30,18 @@ module DevCycle
       @polling_enabled = true
       @sse_active = false
       @max_config_retries = 2
+      @closed = false
+      # Guards starting and stopping the poller and the SSE connection, so
+      # that close cannot race with a poll or an SSE message restarting them.
+      @lifecycle_lock = Monitor.new
       @config_poller = Concurrent::TimerTask.new({
                                                    execution_interval: @local_bucketing.options.config_polling_interval_ms.fdiv(1000)
                                                  }) do |_|
         fetch_config
       end
 
-      t = Thread.new { initialize_config }
-      t.join if wait_for_init
+      @init_thread = Thread.new { initialize_config }
+      @init_thread.join if wait_for_init
     end
 
     def initialize_config
@@ -51,6 +56,7 @@ module DevCycle
     end
 
     def fetch_config(min_last_modified: -1)
+      return if @closed
       return unless @polling_enabled || (@sse_active && @enable_sse)
 
       req = Typhoeus::Request.new(
@@ -159,52 +165,79 @@ module DevCycle
     end
 
     def start_polling(sse)
-      if sse
-        @config_poller.shutdown if @config_poller.running?
-        @config_poller = Concurrent::TimerTask.new({ execution_interval: 60 * 10 }) do |_|
-          fetch_config
+      @lifecycle_lock.synchronize do
+        return if @closed
+        if sse
+          @config_poller.shutdown if @config_poller.running?
+          @config_poller = Concurrent::TimerTask.new({ execution_interval: 60 * 10 }) do |_|
+            fetch_config
+          end
+          @sse_polling = sse
         end
-        @sse_polling = sse
+        @polling_enabled = true
+        @config_poller.execute if @polling_enabled && (!@sse_active || sse)
       end
-      @polling_enabled = true
-      @config_poller.execute if @polling_enabled && (!@sse_active || sse)
     end
 
     def stop_polling()
-      @polling_enabled = false
-      @config_poller.shutdown if @config_poller.running?
+      @lifecycle_lock.synchronize do
+        @polling_enabled = false
+        @config_poller.shutdown if @config_poller.running?
+      end
     end
 
     def stop_sse
       return unless @enable_sse
-      @sse_active = false
-      @sse_polling = false
-      @sse_client.close if @sse_client
-      start_polling(@sse_polling)
+      @lifecycle_lock.synchronize do
+        @sse_active = false
+        @sse_polling = false
+        @sse_client.close if @sse_client
+        start_polling(@sse_polling)
+      end
     end
 
+    # Stops the config poller and closes the SSE connection. Waits for the
+    # initial config fetch to finish first, so nothing is started afterwards.
+    # Calling close more than once is safe.
     def close
-      @config_poller.shutdown if @config_poller.running?
+      @lifecycle_lock.synchronize do
+        @closed = true
+      end
+      @init_thread.join unless @init_thread.nil? || @init_thread == Thread.current
+      @lifecycle_lock.synchronize do
+        @polling_enabled = false
+        @config_poller.shutdown if @config_poller.running?
+        @sse_active = false
+        @sse_client.close if @sse_client
+      end
       nil
+    end
+
+    def closed?
+      @closed
     end
 
     def init_sse(path)
       return unless @enable_sse
-      @logger.debug("Initializing SSE with url: #{path}")
-      @sse_active = true
-      @sse_client = SSE::Client.new(path) do |client|
-        client.on_event do |event|
+      @lifecycle_lock.synchronize do
+        return if @closed
+        @logger.debug("Initializing SSE with url: #{path}")
+        @sse_active = true
+        @sse_client = SSE::Client.new(path) do |client|
+          client.on_event do |event|
 
-          parsed_json = JSON.parse(event.data)
-          handle_sse(parsed_json)
-        end
-        client.on_error do |error|
-          @logger.debug("SSE Error: #{error.message}")
+            parsed_json = JSON.parse(event.data)
+            handle_sse(parsed_json)
+          end
+          client.on_error do |error|
+            @logger.debug("SSE Error: #{error.message}")
+          end
         end
       end
     end
 
     def handle_sse(event_data)
+      return if @closed
       unless @sse_polling
         stop_polling
         start_polling(true)
