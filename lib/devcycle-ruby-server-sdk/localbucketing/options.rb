@@ -9,6 +9,7 @@ module DevCycle
     attr_reader :events_api_uri
     attr_reader :bucketing_api_uri
     attr_reader :logger
+    attr_reader :bucketing_wasm
 
     def initialize(
       enable_cloud_bucketing: false,
@@ -25,7 +26,8 @@ module DevCycle
       logger: nil,
       config_cdn_uri: 'https://config-cdn.devcycle.com',
       events_api_uri: 'https://events.devcycle.com',
-      enable_edge_db: false
+      enable_edge_db: false,
+      bucketing_wasm: nil
     )
       @logger = logger || defined?(Rails) ? Rails.logger : Logger.new(STDOUT)
       @enable_cloud_bucketing = enable_cloud_bucketing
@@ -84,6 +86,9 @@ module DevCycle
       @config_cdn_uri = config_cdn_uri
       @events_api_uri = events_api_uri
       @bucketing_api_uri = "https://bucketing-api.devcyle.com"
+      # Compiled bucketing module to build this client's WASM instance from.
+      # Defaults to DevCycle::BucketingWasm.default when nil.
+      @bucketing_wasm = bucketing_wasm
     end
 
     def event_queue_options

@@ -15,6 +15,7 @@ require 'devcycle-ruby-server-sdk/api_client'
 require 'devcycle-ruby-server-sdk/api_error'
 require 'devcycle-ruby-server-sdk/version'
 require 'devcycle-ruby-server-sdk/configuration'
+require 'devcycle-ruby-server-sdk/lifecycle_errors'
 
 # Models
 require 'devcycle-ruby-server-sdk/models/error_response'
@@ -36,6 +37,7 @@ require 'devcycle-ruby-server-sdk/api/client'
 require 'devcycle-ruby-server-sdk/api/dev_cycle_provider'
 
 require 'devcycle-ruby-server-sdk/localbucketing/options'
+require 'devcycle-ruby-server-sdk/localbucketing/bucketing_wasm'
 require 'devcycle-ruby-server-sdk/localbucketing/local_bucketing'
 require 'devcycle-ruby-server-sdk/localbucketing/platform_data'
 require 'devcycle-ruby-server-sdk/localbucketing/bucketed_user_config'
