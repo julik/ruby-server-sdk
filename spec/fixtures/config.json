@@ -1,0 +1,60 @@
+{
+  "project": {
+    "_id": "6216420c2ea68943c8833c09",
+    "key": "default",
+    "a0_organization": "org_NszUFyWBFy7cr95J",
+    "settings": {
+      "edgeDB": { "enabled": false },
+      "optIn": { "enabled": false, "colors": {} }
+    }
+  },
+  "environment": {
+    "_id": "6216420c2ea68943c8833c0b",
+    "key": "development"
+  },
+  "features": [
+    {
+      "_id": "62a34c18e1c2e5d1d84d4a5c",
+      "key": "test-feature",
+      "type": "release",
+      "variations": [
+        {
+          "_id": "62a34c18e1c2e5d1d84d4a5d",
+          "key": "variation-on",
+          "name": "Variation On",
+          "variables": [
+            { "_var": "62a34c18e1c2e5d1d84d4a60", "value": "on" },
+            { "_var": "62a34c18e1c2e5d1d84d4a61", "value": true }
+          ]
+        }
+      ],
+      "configuration": {
+        "_id": "62a34c18e1c2e5d1d84d4a62",
+        "targets": [
+          {
+            "_id": "62a34c18e1c2e5d1d84d4a63",
+            "_audience": {
+              "_id": "62a34c18e1c2e5d1d84d4a64",
+              "filters": {
+                "operator": "and",
+                "filters": [
+                  { "type": "all", "_audiences": [], "values": [], "filters": [] }
+                ]
+              }
+            },
+            "distribution": [
+              { "_variation": "62a34c18e1c2e5d1d84d4a5d", "percentage": 1 }
+            ]
+          }
+        ],
+        "forcedUsers": {}
+      }
+    }
+  ],
+  "variables": [
+    { "_id": "62a34c18e1c2e5d1d84d4a60", "key": "test-string-variable", "type": "String" },
+    { "_id": "62a34c18e1c2e5d1d84d4a61", "key": "test-boolean-variable", "type": "Boolean" }
+  ],
+  "variableHashes": {},
+  "audiences": {}
+}
